@@ -1,3 +1,5 @@
+<img width="1911" height="858" alt="image" src="https://github.com/user-attachments/assets/d82d51da-42d3-4bdd-8c61-252a7977ee7c" />
+
 # Step 2 — PostgreSQL + 정규화 Kanban
 
 기존 Step 1은 SQLite 단일 `cards` 테이블 기반이었습니다.
