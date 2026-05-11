@@ -1,10 +1,18 @@
-from enum import Enum
-from typing import Dict, List
-from uuid import uuid4
-
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends
+from fastapi import FastAPI
+from fastapi import HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
+
+from database import Base
+from database import SessionLocal
+from database import engine
+from models import Card
+from schemas import CardResponse
+from schemas import CreateCardRequest
+from schemas import UpdateCardRequest
+
+Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Kanban API")
 
@@ -17,113 +25,90 @@ app.add_middleware(
 )
 
 
-class Status(str, Enum):
-    todo = "todo"
-    in_progress = "in_progress"
-    done = "done"
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
 
-class Card(BaseModel):
-    id: str
-    title: str
-    description: str = ""
-    status: Status
-    order: int = 0
+
+@app.get("/cards", response_model=list[CardResponse])
+def get_cards(db: Session = Depends(get_db)):
+    return db.query(Card).order_by(Card.status, Card.order).all()
 
 
-class CreateCardRequest(BaseModel):
-    title: str = Field(..., min_length=1, max_length=100)
-    description: str = ""
-    status: Status = Status.todo
-
-
-class UpdateCardRequest(BaseModel):
-    title: str | None = Field(default=None, min_length=1, max_length=100)
-    description: str | None = None
-    status: Status | None = None
-    order: int | None = None
-
-
-cards: Dict[str, Card] = {}
-
-
-def seed_data() -> None:
-    initial_cards = [
-        Card(id=str(uuid4()), title="요구사항 정리", description="Kanban 기능 범위 정의", status=Status.todo, order=0),
-        Card(id=str(uuid4()), title="API 설계", description="CRUD 및 이동 API 작성", status=Status.in_progress, order=0),
-        Card(id=str(uuid4()), title="프로젝트 생성", description="Vite/FastAPI 초기 세팅", status=Status.done, order=0),
-    ]
-    for card in initial_cards:
-        cards[card.id] = card
-
-
-seed_data()
-
-
-@app.get("/health")
-def health() -> dict:
-    return {"status": "ok"}
-
-
-@app.get("/cards", response_model=List[Card])
-def list_cards() -> List[Card]:
-    return sorted(cards.values(), key=lambda card: (card.status.value, card.order))
-
-
-@app.post("/cards", response_model=Card, status_code=201)
-def create_card(payload: CreateCardRequest) -> Card:
-    status_cards = [card for card in cards.values() if card.status == payload.status]
-    next_order = len(status_cards)
+@app.post("/cards", response_model=CardResponse)
+def create_card(payload: CreateCardRequest, db: Session = Depends(get_db)):
+    count = db.query(Card).filter(Card.status == payload.status).count()
 
     card = Card(
-        id=str(uuid4()),
         title=payload.title,
         description=payload.description,
         status=payload.status,
-        order=next_order,
+        order=count,
     )
-    cards[card.id] = card
+
+    db.add(card)
+    db.commit()
+    db.refresh(card)
+
     return card
 
+@app.patch("/cards/{card_id}", response_model=CardResponse)
+def update_card(
+    card_id: str,
+    payload: UpdateCardRequest,
+    db: Session = Depends(get_db),
+):
+    card = db.query(Card).filter(Card.id == card_id).first()
 
-@app.patch("/cards/{card_id}", response_model=Card)
-def update_card(card_id: str, payload: UpdateCardRequest) -> Card:
-    card = cards.get(card_id)
     if not card:
         raise HTTPException(status_code=404, detail="Card not found")
 
     update_data = payload.model_dump(exclude_unset=True)
-    updated = card.model_copy(update=update_data)
-    cards[card_id] = updated
-    return updated
+
+    for key, value in update_data.items():
+        setattr(card, key, value)
+
+    db.commit()
+    db.refresh(card)
+
+    return card
 
 
-@app.delete("/cards/{card_id}", status_code=204)
-def delete_card(card_id: str) -> None:
-    if card_id not in cards:
-        raise HTTPException(status_code=404, detail="Card not found")
-    del cards[card_id]
+@app.delete("/cards/{card_id}")
+def delete_card(card_id: str, db: Session = Depends(get_db)):
+    card = db.query(Card).filter(Card.id == card_id).first()
 
-
-@app.post("/cards/{card_id}/move", response_model=Card)
-def move_card(card_id: str, payload: UpdateCardRequest) -> Card:
-    card = cards.get(card_id)
     if not card:
         raise HTTPException(status_code=404, detail="Card not found")
 
-    if payload.status is None:
-        raise HTTPException(status_code=400, detail="status is required")
+    db.delete(card)
+    db.commit()
 
-    same_column_cards = [c for c in cards.values() if c.status == payload.status and c.id != card_id]
-    requested_order = payload.order if payload.order is not None else len(same_column_cards)
-    safe_order = max(0, min(requested_order, len(same_column_cards)))
+    return {"message": "deleted"}
 
-    moved = card.model_copy(update={"status": payload.status, "order": safe_order})
-    cards[card_id] = moved
 
-    reordered = same_column_cards[:]
-    reordered.insert(safe_order, moved)
-    for index, item in enumerate(reordered):
-        cards[item.id] = item.model_copy(update={"order": index})
+@app.post("/cards/{card_id}/move", response_model=CardResponse)
+def move_card(
+    card_id: str,
+    payload: UpdateCardRequest,
+    db: Session = Depends(get_db),
+):
+    card = db.query(Card).filter(Card.id == card_id).first()
 
-    return cards[card_id]
+    if not card:
+        raise HTTPException(status_code=404, detail="Card not found")
+
+    if payload.status is not None:
+        card.status = payload.status
+
+    if payload.order is not None:
+        card.order = payload.order
+
+    db.commit()
+    db.refresh(card)
+
+    return card
