@@ -1,9 +1,9 @@
 from sqlalchemy.orm import Session
 
-from app.models import Board
-from app.models import BoardColumn
-from app.models import Business
-from app.models import Card
+from app.kanban.models import Board
+from app.kanban.models import BoardColumn
+from app.kanban.models import Business
+from app.kanban.models import Card
 
 
 def seed_data(db: Session) -> None:
