@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: step2-kanban-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: kanban
+      POSTGRES_PASSWORD: kanban1234
+      POSTGRES_DB: kanban_db
+    ports:
+      - "5435:5432"
+    volumes:
+      - step2_kanban_postgres_data:/var/lib/postgresql/data
+
+volumes:
+  step2_kanban_postgres_data:
